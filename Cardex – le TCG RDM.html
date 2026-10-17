@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cardex – le TCG RDM</title>
+<style>
+:root{--bg:#f6f3ee;--fg:#1d1b20;--cd:#fff;--mu:#6b6670;--ac:#6d3df0;--bd:#ddd6ca;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14121a;--fg:#f0edf5;--cd:#201d29;--mu:#9d97a8;--ac:#9a7bff;--bd:#352f44;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14121a;--fg:#f0edf5;--cd:#201d29;--mu:#9d97a8;--ac:#9a7bff;--bd:#352f44;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:960px;margin:0 auto;padding:12px}
+header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+h1{margin:0;font-size:22px}h2{font-size:17px;margin:18px 0 8px}
+nav{display:flex;gap:6px;margin:12px 0}
+button,select,input,textarea{font:inherit;color:var(--fg);background:var(--cd);border:1px solid var(--bd);border-radius:8px;padding:7px 11px}
+button{cursor:pointer}button.on,button.pri{background:var(--ac);color:#fff;border-color:var(--ac)}
+input,textarea,select{width:100%;box-sizing:border-box;margin:4px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px}
+.tc{background:var(--cd);border:2px solid var(--r);border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:4px;box-shadow:0 0 14px -6px var(--r)}
+.tc img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px}
+.tc i{color:var(--r);font-style:normal;font-size:12px;font-weight:700;text-transform:uppercase}
+.tc p{margin:0;font-size:13px;color:var(--mu)}.tc small{color:var(--mu)}.st{font-weight:600}
+.tc button{padding:5px 8px;font-size:13px}
+.ov{position:fixed;inset:0;background:#0008;display:grid;place-items:center;z-index:9;padding:12px}
+.box{background:var(--cd);border:1px solid var(--bd);border-radius:14px;padding:16px;width:min(420px,100%);max-height:90vh;overflow:auto;box-sizing:border-box}
+table{width:100%;border-collapse:collapse}td,th{padding:6px;border-bottom:1px solid var(--bd);text-align:left}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.vs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
+#toast{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--ac);color:#fff;padding:8px 14px;border-radius:20px;display:none;z-index:10}
+</style></head><body><main><div id="app">Chargement…</div></main><div id="m"></div><div id="toast"></div>
+<script>
+const R=[{n:'Commune',c:'#8a8f98',s:[1,6],m:5,d:1},{n:'Rare',c:'#3b82f6',s:[4,9],m:3,d:1},{n:'Épique',c:'#a855f7',s:[7,12],m:1,d:1},{n:'Légendaire',c:'#f59e0b',s:[10,16],m:1,d:3},{n:'Mythique',c:'#ef4444',s:[13,20],m:1,d:7}];
+const S={cards:[],players:[],listings:[],offers:[]};let db,me,pw,ok=false,pulled=null,busy=false,tab='col',scope='mine',last=null;
+const $=s=>document.querySelector(s),app=$('#app');
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nm=id=>S.players.find(x=>x.id===id)?.name||'?',pl=()=>S.players.find(x=>x.id===me);
+const M=h=>{$('#m').innerHTML=h?`<div class="ov" onclick="if(event.target===this)M()"><div class="box">${h}</div></div>`:''};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',2500)};
+const open=()=>S.listings.filter(l=>l.status==='open'),listed=c=>open().some(l=>l.cardId===c.id);
+const mine=()=>S.cards.filter(c=>c.owner===me&&c.copy);
+const left=r=>R[r].m-S.cards.filter(c=>c.creator===me&&!c.copy&&c.rarity===r&&c.ts>Date.now()-R[r].d*864e5).length;
+const per=d=>d===1?'par jour':d===7?'par semaine':'tous les '+d+' jours';
+const CATS=['ROI DU MONDE','RESTE DU MONDE','GUEST','PLACE','ASSIST'];const cn=c=>c.cat==='RDM'?'ROI DU MONDE':c.cat;let cf='';
+
+async function init(){
+  const [d,u]=await Promise.all([claude.use('db'),claude.use('user')]);
+  if(!d||!u){app.textContent='Ouvre cette page connecté à Claude pour accéder au site.';return}
+  db=d;me=await u.id();try{const s=await db.collection('data/users/'+me).doc('pw').get();pw=s.exists?s.data().h:null}catch(e){pw=null}try{ok=sessionStorage.getItem('cx')===me}catch(e){}
+  for(const k of ['cards','players','listings','offers'])
+    db.collection(k).onSnapshot(s=>{S[k]=s.docs.map(x=>({id:x.id,...x.data()}));render()},e=>console.error(e));
+  render();
+}
+const card=(c,act='')=>{const r=R[c.rarity]||R[0];return `<div class="tc" style="--r:${r.c}"><img src="${c.img}" alt=""><b>${esc(c.title)}</b><i>${r.n}${cn(c)?' · '+esc(cn(c)):''}</i><p>${esc(c.desc)}</p><div class="st">⚔️ ${r.s[0]}–${r.s[1]}</div><small>par ${esc(nm(c.creator))}</small>${act}</div>`};
+
+function render(){
+  if(!me||pw===undefined)return;const p=pl();
+  if(!pw||!ok){const nw=!pw;if($('#pw1')&&app.dataset.g===String(nw))return;app.dataset.g=nw;
+    app.innerHTML=`<div class="box" style="margin:40px auto"><h1>${nw?'Créer mon compte':'Connexion'}</h1>${p?`<p>Salut ${esc(p.name)} 👋</p>`:nw?'<input id="pn" maxlength="20" placeholder="Pseudo">':''}<input id="pw1" type="password" placeholder="Mot de passe">${nw?'<input id="pw2" type="password" placeholder="Confirmer le mot de passe">':''}<button class="pri" onclick="${nw?'signup()':'login()'}">${nw?'Créer le compte':'Se connecter'}</button></div>`;return}
+  if(!p){app.textContent='Chargement…';return}app.dataset.g='';
+  const T=[['col','🃏 Collection'],['bat','⚔️ Combats'],['mkt','🛒 Marché'],['pk','📦 Paquets & défis']];
+  app.innerHTML=`<header><h1>Cardex</h1><span>${esc(p.name)} · 🪙 ${p.coins} · 🏆 ${p.elo} <button onclick="logout()">Déconnexion</button></span></header>
+  <nav>${T.map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="tab='${k}';render()">${l}</button>`).join('')}</nav>${{col,bat,mkt,pk:pkv}[tab]()}`;
+}
+const hs=async s=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(me+':'+s)))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const keep=()=>{try{sessionStorage.setItem('cx',me)}catch(e){}};
+function logout(){ok=false;try{sessionStorage.removeItem('cx')}catch(e){}render()}
+async function signup(){const a=$('#pw1').value,b=$('#pw2').value,p=pl(),n=p?p.name:$('#pn')?.value.trim();
+  if(!n)return toast('Pseudo requis');if(a.length<4)return toast('4 caractères minimum');if(a!==b)return toast('Les mots de passe diffèrent');
+  try{const h=await hs(a);await db.collection('data/users/'+me).doc('pw').set({h});if(!p)await db.doc('players/'+me).set({name:n,coins:100,elo:1000,w:0,l:0,packs:PMAX,pt:Date.now(),po:0,done:[]});pw=h;ok=true;keep();render()}catch(e){toast('Erreur : '+(e.message||e))}}
+async function login(){if(await hs($('#pw1').value)===pw){ok=true;keep();render()}else toast('Mot de passe incorrect')}
+
+/* ---------- Collection ---------- */
+function col(){
+  const cs=mine().filter(c=>!cf||cn(c)===cf);
+  return `<div class="row"><b>Mes cartes (${mine().length})</b>
+  
+  <button class="pri" onclick="newCard()">＋ Nouvelle carte</button><select style="width:auto;margin:0" onchange="cf=this.value;render()"><option value="">Toutes catégories</option>${CATS.map(x=>`<option ${cf===x?'selected':''}>${x}</option>`).join('')}</select></div><h2></h2>
+  <div class="grid">${cs.map(c=>card(c,scope==='mine'?(listed(c)?'<small>🏷️ sur le marché</small>':`<div class="row"><button onclick="sell('${c.id}','sale')">Vendre</button><button onclick="sell('${c.id}','trade')">Échanger</button></div>`):'')).join('')||'<p>Aucune carte pour l’instant. Ouvre des paquets !</p>'}</div>`;
+}
+function newCard(){M(`<h2>Nouvelle carte</h2><label>Titre</label><input id="t" maxlength="40"><label>Description</label><textarea id="d" rows="3" maxlength="200"></textarea>
+<label>Rareté</label><select id="r">${R.map((r,i)=>`<option value="${i}" ${left(i)<1?'disabled':''}>${r.n} — ${Math.max(0,left(i))}/${r.m} ${per(r.d)}</option>`).join('')}</select><label>Catégorie</label><select id="ct">${CATS.map(x=>`<option>${x}</option>`).join('')}</select><label>Photo</label><input id="f" type="file" accept="image/*">
+<div class="row"><button class="pri" onclick="mk()">Créer</button><button onclick="M()">Annuler</button></div>`)}
+const shrink=f=>new Promise((ok,ko)=>{const r=new FileReader();r.onload=()=>{const i=new Image();i.onload=()=>{const s=Math.min(1,420/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);ok(c.toDataURL('image/jpeg',.8))};i.onerror=ko;i.src=r.result};r.onerror=ko;r.readAsDataURL(f)});
+async function mk(){
+  const f=$('#f').files[0],t=$('#t').value.trim();if(!f||!t)return toast('Titre et photo requis');
+  try{const img=await shrink(f),r=+$('#r').value;if(left(r)<1)return toast('Limite atteinte pour cette rareté');
+    await db.collection('cards').add({title:t,desc:$('#d').value.trim(),rarity:r,cat:$('#ct').value,img,creator:me,owner:null,ts:Date.now()});M();toast('Carte ajoutée au catalogue : elle arrivera dans les paquets')}
+  catch(e){toast('Erreur : image trop lourde ?')}
+}
+
+/* ---------- Combats ---------- */
+function bat(){
+  const ps=[...S.players].sort((a,b)=>b.elo-a.elo),m=mine();
+  const L=last?`<div class="vs">${card(last.mine)}${card(last.o)}</div><p><b>${last.s===1?'🏆 Victoire':last.s===0?'💀 Défaite':'🤝 Égalité'}</b> — ${last.a} vs ${last.b} (${last.d>=0?'+':''}${last.d} Elo)</p>`:'';
+  return `<div class="box" style="width:auto"><h2 style="margin-top:0">Combat classé</h2><p>Choisis ta carte : un adversaire est tiré au sort parmi les cartes des autres. Chaque carte tire sa puissance au hasard dans la fourchette de sa rareté, la plus forte gagne. Victoire : +10 🪙.</p>
+  <select id="mc">${m.map(c=>`<option value="${c.id}">${esc(c.title)} (${R[c.rarity].n})</option>`).join('')}</select>
+  <button class="pri" onclick="fight()">Lancer le combat</button>${L}</div>
+  <h2>Classement</h2><table><tr><th>#</th><th>Joueur</th><th>Elo</th><th>V / D</th></tr>${ps.map((p,i)=>`<tr><td>${i+1}</td><td>${esc(p.name)}</td><td>${p.elo}</td><td>${p.w} / ${p.l}</td></tr>`).join('')}</table>`;
+}
+async function fight(){
+  const c=S.cards.find(x=>x.id===$('#mc')?.value),pool=S.cards.filter(x=>x.owner!==me&&x.copy&&S.players.some(p=>p.id===x.owner));
+  if(!c||!pool.length)return toast('Il faut une carte et au moins un adversaire');
+  const o=pool[Math.floor(Math.random()*pool.length)],rl=x=>{const[l,h]=R[x.rarity].s;return l+Math.floor(Math.random()*(h-l+1))},a=rl(c),b=rl(o);
+  const p=pl(),q=S.players.find(x=>x.id===o.owner),s=a>b?1:a<b?0:.5,d=Math.round(24*(s-1/(1+10**((q.elo-p.elo)/400))));
+  last={mine:c,o,a,b,d,s};
+  await db.doc('players/'+me).update({elo:p.elo+d,w:p.w+(s===1?1:0),l:p.l+(s===0?1:0),coins:p.coins+(s===1?10:0)});
+  await db.doc('players/'+q.id).update({elo:q.elo-d,w:q.w+(s===0?1:0),l:q.l+(s===1?1:0)});
+}
+
+/* ---------- Paquets & défis ---------- */
+const PM=120000,PMAX=10;
+const pkAv=p=>{const k=p.packs??PMAX;return k>=PMAX?PMAX:Math.min(PMAX,k+Math.floor((Date.now()-(p.pt||Date.now()))/PM))};
+const cd=p=>{const r=PM-((Date.now()-(p.pt||Date.now()))%PM);return Math.floor(r/60000)+':'+String(Math.floor(r/1000)%60).padStart(2,'0')};
+const mc=()=>S.cards.filter(c=>c.creator===me&&!c.copy).length;
+const CH=[['po1','Ouvrir 1 paquet',p=>p.po||0,1,10],['po10','Ouvrir 10 paquets',p=>p.po||0,10,40],['po50','Ouvrir 50 paquets',p=>p.po||0,50,150],
+['c5','Posséder 5 cartes',()=>mine().length,5,20],['c20','Posséder 20 cartes',()=>mine().length,20,60],['c50','Posséder 50 cartes',()=>mine().length,50,150],
+['m1','Créer 1 carte',mc,1,15],['m10','Créer 10 cartes',mc,10,60],
+['w1','Gagner 1 combat',p=>p.w,1,10],['w10','Gagner 10 combats',p=>p.w,10,50],['w25','Gagner 25 combats',p=>p.w,25,120],
+['leg','Posséder une carte Légendaire',()=>mine().some(c=>c.rarity>=3)?1:0,1,50],['myth','Posséder une carte Mythique',()=>mine().some(c=>c.rarity===4)?1:0,1,100],
+['cat','Avoir une carte de chaque catégorie',()=>new Set(mine().map(cn).filter(Boolean)).size,5,100]];
+function pkv(){const p=pl(),av=pkAv(p),dn=p.done||[];
+  return `<div class="box" style="width:auto"><h2 style="margin-top:0">📦 Paquets : ${av}/${PMAX}</h2><p>Tu reçois 1 paquet toutes les 2 minutes (stock max ${PMAX}). Chaque paquet contient 4 cartes du catalogue, la plus rare en dernier ; les raretés élevées tombent moins souvent. ${av<PMAX?`Prochain dans <b id="cd" data-av="${av}">${cd(p)}</b>`:'Stock plein !'}</p>
+  <button class="pri" onclick="open1()" ${av<1?'disabled':''}>Ouvrir un paquet</button>${pulled?`<div class="grid" style="margin-top:10px">${pulled.map(c=>card(c)).join('')}</div>`:''}</div>
+  <h2>Défis</h2><table>${CH.map(([id,t,f,n,r])=>{const v=f(p),d=dn.includes(id);return `<tr><td>${t}</td><td>${Math.min(v,n)}/${n}</td><td>🪙 ${r}</td><td>${d?'✅':`<button ${v>=n?'class="pri"':'disabled'} onclick="claim('${id}')">Récupérer</button>`}</td></tr>`}).join('')}</table>`;
+}
+async function open1(){
+  const p=pl(),av=pkAv(p),orig=S.cards.filter(c=>!c.copy);if(busy)return;
+  if(av<1)return toast('Aucun paquet disponible');if(!orig.length)return toast('Le catalogue est vide');
+  busy=true;try{
+    const W=[60,25,10,4,1],rs=[...new Set(orig.map(c=>c.rarity))];const draw=()=>{let x=Math.random()*rs.reduce((s,r)=>s+W[r],0);
+    const r=rs.find(r=>(x-=W[r])<0)??rs[0],pool=orig.filter(c=>c.rarity===r);return pool[Math.floor(Math.random()*pool.length)]};
+    const k=p.packs??PMAX,pt=p.pt||Date.now(),ns=[draw(),draw(),draw(),draw()].sort((a,b)=>a.rarity-b.rarity).map((s,i)=>({title:s.title,desc:s.desc,rarity:s.rarity,cat:s.cat||'',img:s.img,creator:s.creator,owner:me,ts:Date.now()+i,copy:true}));
+    for(const n of ns)await db.collection('cards').add(n);pulled=ns;
+    await db.doc('players/'+me).update({packs:av-1,pt:av>=PMAX?Date.now():pt+(av-k)*PM,po:(p.po||0)+1});
+  }catch(e){toast('Erreur : '+(e.message||e))}busy=false;render();
+}
+async function claim(id){const p=pl(),c=CH.find(x=>x[0]===id);if((p.done||[]).includes(id)||c[2](p)<c[3])return;
+  await db.doc('players/'+me).update({coins:p.coins+c[4],done:[...(p.done||[]),id]});toast('+'+c[4]+' 🪙')}
+setInterval(()=>{const e=$('#cd'),p=pl();if(!e||!ok||!p)return;if(pkAv(p)!==+e.dataset.av)return render();e.textContent=cd(p)},1000);
+
+/* ---------- Marché ---------- */
+function mkt(){
+  const ls=open().filter(l=>S.cards.some(c=>c.id===l.cardId));
+  return `<div class="grid">${ls.map(l=>{const c=S.cards.find(x=>x.id===l.cardId),mineL=l.seller===me;
+    const offs=mineL?S.offers.filter(o=>o.listingId===l.id&&o.status==='open'&&S.cards.find(x=>x.id===o.cardId)?.owner===o.from):[];
+    const head=l.type==='sale'?`<b>🪙 ${l.price}</b>`:`<b>🔁 Échange</b> <small>${esc(l.want||'')}</small>`;
+    const act=mineL?`<button onclick="cancel('${l.id}')">Retirer</button>${offs.map(o=>{const oc=S.cards.find(x=>x.id===o.cardId);return `<div style="border-top:1px solid var(--bd);padding-top:4px"><small>${esc(nm(o.from))} propose « ${esc(oc.title)} »</small><button onclick="accept('${o.id}')">Accepter</button></div>`}).join('')}`
+      :l.type==='sale'?`<button class="pri" onclick="buy('${l.id}')">Acheter</button>`:`<button class="pri" onclick="propose('${l.id}')">Proposer une carte</button>`;
+    return `<div>${head}${card(c,act)}<small>vendeur : ${esc(nm(l.seller))}</small></div>`}).join('')||'<p>Rien sur le marché. Mets une de tes cartes en vente depuis ta collection.</p>'}</div>`;
+}
+function sell(id,type){M(`<h2>${type==='sale'?'Vendre':'Échanger'} cette carte</h2>${type==='sale'?'<label>Prix (🪙)</label><input id="pr" type="number" min="1" value="20">':'<label>Tu cherches quoi ? (facultatif)</label><input id="wt" maxlength="80">'}
+<div class="row"><button class="pri" onclick="list('${id}','${type}')">Publier</button><button onclick="M()">Annuler</button></div>`)}
+async function list(id,type){const l={cardId:id,seller:me,type,status:'open',ts:Date.now()};
+  if(type==='sale'){l.price=Math.max(1,+$('#pr').value||1)}else l.want=$('#wt').value.trim();
+  await db.collection('listings').add(l);M()}
+const cancel=id=>db.doc('listings/'+id).update({status:'cancel'});
+async function buy(id){const l=S.listings.find(x=>x.id===id),p=pl(),s=S.players.find(x=>x.id===l.seller);
+  if(p.coins<l.price)return toast('Pas assez de pièces');
+  await db.doc('cards/'+l.cardId).update({owner:me});await db.doc('listings/'+id).update({status:'sold'});
+  await db.doc('players/'+me).update({coins:p.coins-l.price});await db.doc('players/'+s.id).update({coins:s.coins+l.price});toast('Carte achetée !')}
+function propose(id){const m=mine().filter(c=>!listed(c));
+  M(`<h2>Proposer une carte</h2>${m.length?`<select id="oc">${m.map(c=>`<option value="${c.id}">${esc(c.title)} (${R[c.rarity].n})</option>`).join('')}</select><div class="row"><button class="pri" onclick="offer('${id}')">Envoyer</button><button onclick="M()">Annuler</button></div>`:'<p>Tu n’as aucune carte disponible.</p>'}`)}
+async function offer(id){await db.collection('offers').add({listingId:id,cardId:$('#oc').value,from:me,status:'open'});M();toast('Proposition envoyée')}
+async function accept(oid){const o=S.offers.find(x=>x.id===oid),l=S.listings.find(x=>x.id===o.listingId);
+  await db.doc('cards/'+l.cardId).update({owner:o.from});await db.doc('cards/'+o.cardId).update({owner:l.seller});
+  await db.doc('listings/'+l.id).update({status:'done'});await db.doc('offers/'+oid).update({status:'done'});toast('Échange effectué !')}
+init();
+</script></body></html>
